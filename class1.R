@@ -51,3 +51,35 @@ nrow(df)
 ncol(df)
 plot(df)
 cor(df)
+df$bmi <- df$weight / (df$height/100) ^ 2
+df <- read.csv("http://bit.ly/CEU-R-heights")
+
+df$weight <- df$weightLb * 0.453592
+df$height <- df$heightIn * 2.54
+df$bmi <- df$weight / (df$height/100) ^ 2
+df$weightLb <- df$heightIn <- NULL
+plot(df)
+
+## install.packages("pairsD3")
+library(pairsD3)
+pairsD3::pairsD3(df)
+
+install.packages("GGally")
+library(GGally)
+ggpairs(df)
+library(ggplot2)
+ggplot(df, aes(x = height)) + geom_histogram()
+
+system.time(g <- ggplot(df, aes(x = height,y=weight,color = sex))+
+              geom_point())
+g+theme_light()
+g+geom_smooth(method="lm",se = FALSE)
+
+ggplot(df, aes(x=height,y=weight)) +
+  geom_point(aes(color=sex))+
+  geom_smooth(method = 'lm',se=TRUE,color='black')+
+  geom_smooth(aes(color = sex),method = 'lm',se=FALSE)
+
+
+g + scale_y_log10()
+
