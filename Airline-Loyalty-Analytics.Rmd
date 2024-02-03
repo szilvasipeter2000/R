@@ -1,0 +1,337 @@
+---
+title: "Airline Loyalty Analytics in R"
+output: html_document
+date: "2024.02.02."
+subtitle: "created by Péter Szilvási"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction of the Dataset
+
+`Airline Loyalty Program` is a relational dataset about a fictitious Canadian airline's loyalty program, including data about members' activity and their information. It includes 2 tables, 28 fields, and 412,230 observations. 
+
+The source is [Maven Analytics](https://mavenanalytics.io/data-playground?search=airline%20loyalty%20program).
+
+
+
+## Business Questions
+- Show KPIs of the performance of the Program.
+  - How many total points were collected, how many were redeemed?
+  - How many dollars were saved by our customers? Total and on average.
+  
+- Show a trendline in the Program from 2017 and 2018
+  - How many total flights were in each month? 
+  - Show seasonalities if there are any.
+
+- How is Customer Lifetime Value (CLV)?
+  - What is the association between city population and CLV?
+  - Show city statistics
+  - Show demographics of CLV.
+* Do we have trendlines in signup/cancellation dates?
+
+## Setting up the environment
+```{r libraries}
+# importing libraries
+library(data.table) 
+library(ggplot2) # for data visualizations
+library(maps) # there is a canada table built in
+library(scales) # helps transform axis scales
+library(gridExtra) # can put together more plots in ggplot
+library(RColorBrewer) # use for color brewing from colorbrewer2.org
+```
+
+
+
+```{r loading data}
+
+# import loyalty table from GitHub
+loyalty <- data.table(read.csv(
+  'https://raw.githubusercontent.com/szilvasipeter2000/R/main/loyalty_history.csv'))
+
+# import flight activity table from GitHub
+activity <- data.table(read.csv(
+  'https://raw.githubusercontent.com/szilvasipeter2000/R/main/flight_activity.csv'))
+```
+
+## Performance of the Program
+
+We can look at the total points collected, total points redeemed, dollars saved, and other program performance indicators.
+```{r loyalty stats, echo = TRUE}
+# aggregated table
+loyalty_points <- activity[, .(total_points = sum(Points.Accumulated),
+                                  total_redeemed = sum(Points.Redeemed),
+                                  dollars_saved = sum(Dollar.Cost.Points.Redeemed),
+                                  points_per_dollar = sum(Points.Redeemed)/sum(Dollar.Cost.Points.Redeemed),
+                                  points_left = pmax(0, sum(Points.Accumulated) - sum(Points.Redeemed))),by= Loyalty.Number]
+
+# adding missed savings, shows how much customers could have saved with the loyalty program
+loyalty_points$missed_savings <- loyalty_points$points_left/loyalty_points$points_per_dollar
+
+loyalty_stats <- data.table(loyalty_points)[,lapply(.SD,function(x) sum(x)),
+                    .SDcols = c('total_points','total_redeemed','dollars_saved','points_left')]
+
+loyalty_stats$average_saved_per_person <- loyalty_stats$dollars_saved/loyalty[,.N]
+loyalty_stats$perc_of_points_used <- loyalty_stats$total_redeemed/loyalty_stats$total_points
+loyalty_stats$dollars_to_save <- loyalty_stats$points_left/mean(loyalty_points$points_per_dollar,na.rm = TRUE)
+```
+
+```{r loyalty output,echo=FALSE}
+print(loyalty_stats)
+```
+
+Over 50 million points were collected, out of which only 12 million was redeemed. This means that only 24.8% of total points were used, which overall led to 1 million dollars saved by our members, 60$ on average per person.
+
+We can also plot how loyalty members utilized the benefits of the program. How much dollars they saved compared to how much they could have saved
+``` {r loyalty plot, echo = TRUE}
+
+ggplot(loyalty_points, aes(x = dollars_saved, y = missed_savings, color = total_redeemed)) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  labs(title = "Scatter Plot of Dollars Saved vs Missed Savings",
+       x = "Dollars Saved",
+       y = "Missed Savings",
+       color = "Total Redeemed") +
+  theme_minimal() +
+  scale_color_continuous(name = "Total Loyalty \n Points Redeemed",type = "viridis")+
+  theme(plot.title = element_text(hjust = 0.5, size = 15))
+```
+
+There are 2 main clusters on this plot. There are those who have saved between 0 and 50 dollars, while having the opportunity to save up to 400 dollars, which they didn't do.
+There are also those who saved around 100 dollars, while missing out on an additional 200 dollars.
+Very few members have utilized all of their points, but those who did, saved more than 300 dollars through our program.
+
+## Trendline of our Program
+Let's look at how our program performed in its lifetime, 2017 and 2018.
+Compare customer dollar savings with the number of flights our company had in the period.
+
+
+```{r pressure, echo=FALSE}
+# Convert 'Year' and 'Month' to factors
+activity[, c("Year", "Month") := lapply(.SD, as.factor), .SDcols = c("Year", "Month")]
+
+# Calculate the sum of 'Total.Flights' by date
+flights_by_date <- activity[,list(total_flights = sum(Total.Flights),
+                                  dollars_saved = sum(Dollar.Cost.Points.Redeemed)/1000), by = .(Year, Month)]
+# Create a new column 'period' as a Date format
+flights_by_date[, period := as.Date(paste(Year, Month, "01", sep = "-"), format = "%Y-%m-%d")]
+```
+
+
+```{r total flights trendline}
+ggplot(flights_by_date) +
+  geom_line(aes(x = period, y = total_flights / 1000, color = "Total Flights \n (in thousands)"), stat = 'identity', linewidth = 1.2) +
+  geom_point(aes(x = period, y = total_flights / 1000, color = "Total Flights \n (in thousands)"), size = 3) +
+  geom_col(aes(x = period, y = dollars_saved, fill = "Dollars Saved \n (in thousands)"), position = 'identity') +
+  geom_text(aes(x = period, y = dollars_saved, label = round(dollars_saved, 2)),
+            position = position_dodge(width = 0.9), vjust = -1, size = 3, color = "black") +
+  geom_text(aes(x = period, y = total_flights / 1000 + 0.2, label = round(total_flights / 1000, 2)),
+            position = position_dodge(width = 0.9), vjust = -1, size = 3, color = "black") +
+  scale_y_continuous(name = "Total Flights (in thousands)", sec.axis = sec_axis(trans = ~ ., name = "Points Redeemed (scaled)")) +
+  labs(title = "Total Flights and Customer Dollars Saved Over Time", x = '') +
+  scale_color_manual(name = "", values = c("Total Flights \n (in thousands)" = "#7570b3")) +
+  scale_fill_manual(name = "", values = c("Dollars Saved \n (in thousands)" = "#1b9e77")) +
+  theme_minimal() +
+  theme(legend.position = "top", legend.box = "horizontal", legend.title.align = 0.5) +
+  scale_x_date(date_labels = "%Y-%m", date_breaks = "1 month") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 15)) +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())
+```
+
+It is visible that in the summer, there are peaks in the number of flights, which is followed by an increase in the dollars saved. It is also clear that the trend of savings follows the trend in the number of flights. 
+Even so, the increase in the number of flights is also clear. Year by year, the company is having more and more customers. 
+
+```{r increasing popularity,echo = FALSE}
+month_names <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+```
+
+```{r increasing popularity by month,echo = TRUE}
+# Plot the increase in popularity of the program
+ggplot(flights_by_date, aes(factor(Month, labels = month_names), dollars_saved, fill = as.factor(Year))) +
+  geom_col(position = 'dodge') +
+  labs(title = "Popularity of the Program",subtitle = "Comparing Months in 2017-2018", y = "Dollars Saved (in thousands $)", x = "", fill = "Year") +
+  theme_minimal() +
+  scale_fill_manual(values = c("#7570b3","#de2d26"))+
+  theme(plot.title = element_text(hjust = 0.5, size = 15),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "top", legend.box = "horizontal", legend.title.align = 0.5)
+```
+
+The increase in the popularity of our loyalty program is clearly visible.
+If we compare each month of 2018 with its corresponding value in 2017, there is not one that hasn't increased.
+
+## Customer Lifetime Value
+Let's look at some geographical representation of our members' Customer Lifetime Value (CLV), which shows the total invoice value for all flights ever booked by the member.
+
+``` {r CLV by Pop, echo = FALSE}
+clv_by_city <- as.data.table(loyalty[Country == 'Canada',sum(CLV),by=.(Province,City)])
+
+# use built in `canada` datatable
+canada <- as.data.table(canada.cities)
+# clean city name from city code to match with loyalty table City variable,
+# -3 cause not only need to remove codes but empty spaces as well
+canada$City <- substr(canada$name, 1, nchar(canada$name) - 3)
+
+# merge so we can see clv by population
+clv_population <- merge(clv_by_city,canada, by = 'City')
+
+```
+
+
+```{r plot CLV by population}
+ggplot(clv_population, aes(pop, V1, color = Province)) +
+  geom_point() +
+  geom_text(aes(label = City), vjust = -0.5, hjust = 0.5, size = 3) +
+  labs(title = 'Customer Lifetime Value Distribution', subtitle = "by City and Province \n on Logarithmic scales", x = 'Log Population', y = 'Log Customer Lifetime Value ($)') +
+  scale_y_log10(labels = scales::comma) +  # log-scale with thousand separator
+  scale_x_log10(labels = scales::comma) +  # log-scale with thousand separator
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 15),
+        plot.subtitle = element_text(hjust = 0.5))
+
+```
+
+Here I use logarithmic scales as otherwise other than the 3 big cities, Toronto, Vancouver, and Montreal, we couldn't see anything about the other cities. Obviously, these 3 cities bring by far the most CLV to the company, but it is still worth looking into the smaller cities. One interesting case is Calgary, which has pretty high Population, but still fails to produce a corresponding high amount of CLV. This city is also located quite far from all other big cities so one might think they fly a lot. Might be worth looking into which competition they use to fly with.
+
+```{r city stats,echo = FALSE}
+# look at salary, CLV and number of customers per city
+loyalty_summary <- loyalty[, .(ncustomer = uniqueN(Loyalty.Number),
+                               CLV = mean(CLV, na.rm = TRUE),
+                               avg_salary = mean(Salary, na.rm = TRUE)), by = City]
+
+```
+
+
+
+```{r plot city stats}
+ggplot(loyalty_summary, aes(x = CLV, reorder(City,CLV), fill = ncustomer)) +
+  geom_col() +
+  scale_fill_gradientn(colours = brewer.pal(9, "PRGn")) +
+  labs(title = "City Statistics",
+       x = " Average Customer Lifetime Value $",
+       y = "",
+       fill = "Number of Customers") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(hjust = 0),
+        legend.position = "top",
+        plot.title = element_text(hjust = 0.5, size = 15))
+```
+
+While Toronto and Vancouver bring in the most Customers, it is visible that the average CLV is by far not from that group. Montreal on the other hand has a relatively high average CLV and also a good amount of Customers.
+
+
+
+## Let's look at some demographics of our Customers.
+```{r clv demographics,echo = FALSE}
+## CLV by EDUCATION
+# Aggregate data
+ed_agg_data <- data.table(aggregate(CLV ~ Education, data = loyalty, FUN = sum))[order(-CLV)]
+# Format labels
+ed_agg_data$label <- paste0(format(round(ed_agg_data$CLV / 1e6,2), big.mark = ","), "M")
+
+
+## CLV by Loyalty Card
+# Aggregate data
+card_agg_data <- data.table(aggregate(CLV ~ Loyalty.Card, data = loyalty, FUN = sum))[order(-CLV)]
+# Format labels
+card_agg_data$label <- paste0(format(round(card_agg_data$CLV / 1e6,2), big.mark = ","), "M")
+
+
+## CLV by Marital Status
+# Aggregate data
+marital_agg_data <- data.table(aggregate(CLV ~ Marital.Status, data = loyalty, FUN = sum))[order(-CLV)]
+# Format labels
+marital_agg_data$label <- paste0(format(round(marital_agg_data$CLV / 1e6,2), big.mark = ","), "M")
+
+
+```
+
+```{r plot demographics,echo = TRUE}
+# Create the bar graph for each facet
+p1 <- ggplot(marital_agg_data, aes(reorder(Marital.Status,-CLV), y = CLV, fill = Marital.Status,label=label)) +
+  geom_bar(stat = "identity") +
+  geom_text(position = position_stack(vjust = 0.8)) +
+  labs(title = "Customer Lifetime Value",
+       subtitle = "by Marital Status",
+       x = "",
+       fill = "") +
+  theme_minimal()+
+  scale_fill_manual(values = c("#fc8d62", "#1b9e77", "#7570b3"))+
+  theme(plot.title = element_text(size = 15),
+        axis.title.y = element_blank(),  # remove y-axis title
+        axis.text.y = element_blank(),   # remove y-axis tick labels
+        axis.ticks.y = element_blank())  # remove y-axis ticks
+
+p2 <- ggplot(card_agg_data, aes(reorder(Loyalty.Card,-CLV), y = CLV, fill = Loyalty.Card,label=label)) +
+  geom_bar(stat = "identity") +
+  geom_text(position = position_stack(vjust = 0.8)) +
+  labs(subtitle = "by Membership Card",
+       x = "",
+       fill = "") +
+  theme_minimal()+
+  scale_fill_manual(values = c("#fc8d62","#7570b3", "#1b9e77"))+
+  theme(axis.title.y = element_blank(),  
+        axis.text.y = element_blank(),   
+        axis.ticks.y = element_blank())  
+
+p3 <- ggplot(ed_agg_data, aes(reorder(Education,-CLV), y = CLV, fill = Education,label=label)) +
+  geom_bar(stat = "identity") +
+  geom_text(position = position_stack(vjust = 0.8)) +
+  labs(subtitle = "by Education",
+       x = "",
+       fill = "") +
+  theme_minimal()+
+  scale_fill_manual(values = c("#1b9e77","#7570b3","#ffffb3","#fc8d62","#fbb4ae"))+
+  theme(axis.title.y = element_blank(),  
+        axis.text.y = element_blank(),   
+        axis.ticks.y = element_blank())  
+
+# Arrange the plots side by side
+grid.arrange(p1, p2, p3, nrow = 3)
+```
+
+Here we can see aggregated Customer Lifetime Values for 3 categories. Married people brought by far the most value. Between Star and Nova Membership, there is a small difference. Both have quite high values. Aurora is also performing quite well. As for Education, individuals with Bachelor's degrees bring by far the most value to the company.
+
+## New signups and Cancellations
+
+```{r trendline in signups, echo = FALSE}
+### Signup trendlines
+# count signups
+signups <- loyalty[,.(nsignups=.N),by = .(Enrollment.Year, Enrollment.Month)]
+# filter out NAs so they are not counted; only count which have a cancellation date
+# doing it separately is easier
+cancellations <- loyalty[!is.na(Cancellation.Year),.(ncancellations=.N),by = .(Cancellation.Year, Cancellation.Month)]
+
+# Create a new column 'period' as a Date format, this will be the ID we can merge by
+signups[, period := as.Date(paste(Enrollment.Year, Enrollment.Month, "01", sep = "-"), format = "%Y-%m-%d")]
+cancellations[, period := as.Date(paste(Cancellation.Year, Cancellation.Month, "01", sep = "-"), format = "%Y-%m-%d")]
+
+# merge
+singups_cancellations <- merge(signups,cancellations)
+```
+
+```{r plot trendline in registrations}
+ggplot(singups_cancellations, aes(x = period)) +
+  geom_bar(aes(y = nsignups, fill = "Signups"), stat = "identity") +
+  geom_bar(aes(y = ncancellations, fill = "Cancellations"), stat = "identity") +
+  labs(title = "Signups and Cancellations Over Time",
+       x = "",
+       y = "Count",
+       fill = "Event Type") +
+  scale_fill_manual(name = "", values = c("Signups" = "#a1d99b", "Cancellations" = "#e41a1c")) +
+  theme_minimal() +
+  scale_x_date(date_labels = "%Y-%m", date_breaks = "3 month") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  theme(plot.title = element_text(hjust = 0.5, size = 15))+
+  theme(legend.position = "top", legend.box = "horizontal", legend.title.align = 0.5)
+```
+
+There might be an increase in the popularity of utilizing the benefits of the program, but the number of new signups, except for 1 peak in 2018, clearly has been constant for some time. However, the number of people who cancel their membership is increasing year by year.
+
+
+
